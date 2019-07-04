@@ -16,19 +16,20 @@ module.exports.init = async function init(hooks) {
 };
 
 async function handleCommand(event) {
-    // CHATHISTORY ${this.name} timestamp=${timeStr} message_count=${numMessages}
+    // CHATHISTORY ${subcommand} ${this.name} <timestamp=${timeStr} | msgid=${msgid}> ${numMessages}
     event.preventDefault();
     event.passthru = false;
 
     let msg = event.message;
     let con = event.client;
     let messageDb = con.messages;
+    
+    let subcommand = mParam(msg, 0, '').toUpperCase();
+    let target = mParam(msg, 1, '');
+    let [query, queryParam] = mParam(msg, 2, '').split('=');
+    let msgCount = mParam(msg, 3, '');
 
-    let target = mParam(msg, 0, '');
-    let [, timestamp] = mParam(msg, 1, '').split('=');
-    let [, msgCount] = mParam(msg, 2, '').split('=');
-
-    msgCount = parseInt(msgCount);
+    msgCount = parseInt(msgCount, 10);
     if (isNaN(msgCount)) {
         msgCount = MAX_MESSAGES;
     } else if (msgCount > MAX_MESSAGES) {
@@ -36,30 +37,71 @@ async function handleCommand(event) {
     } else if (msgCount < -MAX_MESSAGES) {
         msgCount = -MAX_MESSAGES;
     }
+    
+    let messages = [];
+    let ts;
+    if (query === '*') {
+        ts = Date.now();
+    } else if (query === 'timestamp') {
+        ts = new Date(queryParam).getTime();
+    }
+    else if (query === 'msgid') {
+        let msg = await messageDb.getMessageByMsgId(
+            con.state.authUserId,
+            con.state.authNetworkId,
+            target,
+            queryParam
+        );
+        ts = msg.ts;
+    }
 
-    let ts = new Date(timestamp).getTime();
     if (isNaN(ts)) {
         ts = Date.now();
     }
 
-    let messages = [];
-
-    if (msgCount > 0) {
-        messages = await messageDb.getMessagesFromTime(
-            con.state.authUserId,
-            con.state.authNetworkId,
-            target,
-            ts,
-            msgCount,
-        );
-    } else {
+    if (subcommand === 'LATEST' || subcommand === 'BEFORE') {
         messages = await messageDb.getMessagesBeforeTime(
             con.state.authUserId,
             con.state.authNetworkId,
             target,
             ts,
-            Math.abs(msgCount),
+            Math.abs(msgCount)
         );
+    } else if(subcommand === 'BETWEEN') {
+        let [queryEnd, queryParamEnd] = mParam(msg, 3, '').split('=');
+        let ts2 = new Date(queryParamEnd).getTime();
+        msgCount = mParam(msg, 4, '');
+        messages = await messageDb.getMessagesBetweenTimes(
+            con.state.authUserId,
+            con.state.authNetworkId,
+            target,
+            ts,
+            ts2,
+            Math.abs(msgCount)
+        ); 
+    } else if (subcommand === 'AFTER') {
+        messages = await messageDb.getMessagesAfterTime(
+            con.state.authUserId,
+            con.state.authNetworkId,
+            target,
+            ts,
+            Math.abs(msgCount)
+        );
+    } else if (subcommand === 'AROUND') {
+        messages = await messageDb.getMessagesBeforeTime(
+            con.state.authUserId,
+            con.state.authNetworkId,
+            target,
+            ts,
+            Math.floor(msgCount/2)
+        );
+        messages = message.concat(await messageDb.getMessagesAfterTime(
+            con.state.authUserId,
+            con.state.authNetworkId,
+            target,
+            ts,
+            Math.floor(msgCount/2)
+        ));
     }
 
     let batchId = Math.round(Math.random()*1e17).toString(36);
